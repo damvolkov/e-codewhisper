@@ -1,0 +1,51 @@
+# Source TypeScript (compiled to out/)
+src/client/**
+
+# Development files
+.vscode/**
+.vscode-test/**
+node_modules/**
+*.map
+
+# Python virtual environment
+.venv/**
+__pycache__/**
+*.pyc
+.pytest_cache/**
+.mypy_cache/**
+.ruff_cache/**
+
+# Build artifacts
+*.vsix
+
+# Git
+.git/**
+.gitignore
+
+# Development configs
+tsconfig.json
+esbuild.js
+.eslintrc*
+eslint.config.*
+
+# UV/Pip
+uv.lock
+.python-version
+
+# Tests
+tests/**
+**/*.test.ts
+**/*.spec.ts
+
+# Documentation source (README is kept)
+docs/**
+
+# IDE specific
+.idea/**
+*.swp
+*.swo
+*~
+
+# OS specific
+.DS_Store
+Thumbs.db
