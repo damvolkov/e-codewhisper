@@ -1,0 +1,37 @@
+# CodeWhisper faster-whisper STT Service
+# Default configuration for local transcription server
+#
+# Usage:
+#   docker compose up -d
+#
+# Environment variables can be customized via .env file or direct override
+
+services:
+  stt:
+    image: fedirz/faster-whisper-server:latest-cuda
+    container_name: codewhisper-stt
+    ports:
+      - "${STT_PORT:-4445}:8000"
+    volumes:
+      - ${STT_MODEL_CACHE:-./models}:/root/.cache/huggingface
+    environment:
+      - WHISPER__MODEL=${WHISPER_MODEL:-small}
+      - WHISPER__TASK=transcribe
+      - WHISPER__LANGUAGE=${WHISPER_LANGUAGE:-en}
+      - WHISPER__INFERENCE_DEVICE=${WHISPER_DEVICE:-cuda}
+      - WHISPER__COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:-float16}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+

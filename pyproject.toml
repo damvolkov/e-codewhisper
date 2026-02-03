@@ -1,0 +1,61 @@
+[project]
+name = "codewhisper"
+version = "0.1.0"
+description = "Voice-to-text for Cursor/VS Code using faster-whisper with TEN VAD"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.12"
+authors = [
+    { name = "Damien", email = "damien@example.com" }
+]
+keywords = ["voice", "speech", "transcription", "whisper", "vad", "vscode", "cursor"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Plugins",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+dependencies = [
+    "numpy>=1.26.0",
+    "httpx>=0.28.0",
+    "ten-vad",
+]
+
+[project.scripts]
+codewhisper = "src.server.python.codewhisper:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.8",
+    "ty>=0.0.1a6",
+]
+
+[tool.uv.sources]
+ten-vad = { git = "https://github.com/TEN-framework/ten-vad.git" }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/server"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["src/server/python/tests"]
