@@ -1,0 +1,165 @@
+{
+  "name": "ecodewhisper",
+  "displayName": "ECodeWhisper",
+  "description": "Eager Code Whisper - Voice-to-text for Cursor/VS Code using faster-whisper with TEN VAD for automatic silence detection. Python-powered real-time transcription.",
+  "version": "0.1.2",
+  "publisher": "damvolkov",
+  "author": {
+    "name": "damvolkov",
+    "email": "damvolkovv@gmail.com"
+  },
+  "license": "MIT",
+  "icon": "images/codewhisper.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/damvolkov/e-codewhisper.git"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other",
+    "Machine Learning"
+  ],
+  "keywords": [
+    "voice",
+    "speech",
+    "transcription",
+    "whisper",
+    "faster-whisper",
+    "vad",
+    "voice-activity-detection"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ecodewhisper.toggleRecording",
+        "title": "ECodeWhisper: Toggle Recording"
+      },
+      {
+        "command": "ecodewhisper.cancelRecording",
+        "title": "ECodeWhisper: Cancel Recording"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ecodewhisper.toggleRecording",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e"
+      },
+      {
+        "command": "ecodewhisper.cancelRecording",
+        "key": "escape",
+        "when": "ecodewhisper.isRecording"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "ECodeWhisper Settings",
+      "properties": {
+        "ecodewhisper.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "Path to Python interpreter (requires Python 3.12+)"
+        },
+        "ecodewhisper.whisperEndpoint": {
+          "type": "string",
+          "default": "http://localhost:4445/v1/audio/transcriptions",
+          "description": "HTTP endpoint for faster-whisper server"
+        },
+        "ecodewhisper.model": {
+          "type": "string",
+          "default": "small",
+          "enum": [
+            "tiny",
+            "base",
+            "small",
+            "medium",
+            "large-v2",
+            "large-v3"
+          ],
+          "description": "Whisper model to use for transcription"
+        },
+        "ecodewhisper.language": {
+          "type": "string",
+          "default": "en",
+          "description": "Language code for transcription (e.g., 'en', 'es', 'fr'). Leave empty for auto-detection."
+        },
+        "ecodewhisper.vadSilenceThreshold": {
+          "type": "number",
+          "default": 1.5,
+          "minimum": 0.3,
+          "maximum": 5,
+          "description": "Seconds of silence before VAD stops recording automatically"
+        },
+        "ecodewhisper.vadThreshold": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.1,
+          "maximum": 0.9,
+          "description": "VAD probability threshold for voice detection (0.1-0.9)"
+        },
+        "ecodewhisper.sampleRate": {
+          "type": "number",
+          "default": 16000,
+          "enum": [
+            16000
+          ],
+          "description": "Audio sample rate (16kHz required for TEN VAD)"
+        },
+        "ecodewhisper.autoInsert": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically insert transcription at cursor position"
+        },
+        "ecodewhisper.showPartialResults": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show partial transcription results while speaking"
+        },
+        "ecodewhisper.minRecordingTime": {
+          "type": "number",
+          "default": 1.0,
+          "minimum": 0.5,
+          "maximum": 5,
+          "description": "Minimum recording time in seconds before VAD can stop (prevents instant stops)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "npm run check-types && node esbuild.js",
+    "compile-tests": "tsc -p ./tsconfig.test.json",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "npm run check-types && node esbuild.js --production",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src --ext ts",
+    "pretest": "npm run compile && npm run compile-tests",
+    "test": "node ./out/test/runTest.js",
+    "vsce:package": "vsce package",
+    "vsce:publish": "vsce package && vsce publish"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.x",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.25.0",
+    "eslint": "^9.0.0",
+    "glob": "^13.0.0",
+    "mocha": "^11.7.5",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.5.0"
+  }
+}
