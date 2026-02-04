@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""ECodeWhisper: Real-time voice transcription with TEN VAD and faster-whisper."""
+"""ECodeWhisper: Real-time voice transcription with WebSocket streaming and TEN VAD."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import io
 import json
 import sys
 import time
-import wave
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -23,11 +20,13 @@ except ImportError:
     sys.stderr.write("ERROR: ten-vad not installed. Run: pip install git+https://github.com/TEN-framework/ten-vad.git\n")
     sys.exit(1)
 
-# HTTP client
+# WebSocket client
 try:
-    import httpx
+    import websockets
+    from websockets.exceptions import ConnectionClosed
 except ImportError:
-    httpx = None  # type: ignore[assignment]
+    sys.stderr.write("ERROR: websockets not installed. Run: pip install websockets\n")
+    sys.exit(1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +85,6 @@ class VoiceActivityDetector:
 
     def process(self, audio_chunk: NDArray[np.int16]) -> tuple[bool, bool]:
         """Process audio chunk and return (has_voice, should_stop)."""
-        # TenVad.process() returns (probability: float, flags: int)
-        # flags is 1 if speech detected, 0 otherwise
         _probability, is_speech_flag = self._vad.process(audio_chunk)
         is_voice = is_speech_flag == 1
 
@@ -97,12 +94,10 @@ class VoiceActivityDetector:
         else:
             self._silence_frames += 1
 
-        # Check minimum recording time
         elapsed = time.time() - self._start_time
         if elapsed < self._min_recording_time:
             return is_voice, False
 
-        # Only stop after we've detected speech and then silence
         should_stop = self._has_speech and self._silence_frames >= self._max_silence_frames
         return is_voice, should_stop
 
@@ -116,28 +111,22 @@ class VoiceActivityDetector:
 class AudioRecorder:
     """Audio capture using arecord (Linux ALSA)."""
 
-    __slots__ = ("_config", "_process", "_audio_data", "_buffer")
+    __slots__ = ("_config", "_process", "_buffer")
 
     def __init__(self, config: Config) -> None:
         self._config = config
         self._process: asyncio.subprocess.Process | None = None
-        self._audio_data: list[bytes] = []
         self._buffer = b""
 
     async def start(self) -> None:
         """Start recording process."""
         cmd = [
             "arecord",
-            "-f",
-            "S16_LE",
-            "-c",
-            "1",
-            "-r",
-            str(self._config.sample_rate),
-            "-t",
-            "raw",
-            "-q",
-            "-",
+            "-f", "S16_LE",
+            "-c", "1",
+            "-r", str(self._config.sample_rate),
+            "-t", "raw",
+            "-q", "-",
         ]
 
         log(f"Starting arecord with: {' '.join(cmd)}")
@@ -147,9 +136,7 @@ class AudioRecorder:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        self._audio_data = []
         self._buffer = b""
-
         log(f"arecord started with PID: {self._process.pid}")
 
     async def read_chunk(self) -> bytes | None:
@@ -159,7 +146,6 @@ class AudioRecorder:
 
         chunk_bytes = self._config.hop_size * 2  # 16-bit = 2 bytes per sample
 
-        # Read until we have enough data
         while len(self._buffer) < chunk_bytes:
             try:
                 data = await asyncio.wait_for(
@@ -174,14 +160,12 @@ class AudioRecorder:
                 log("Timeout waiting for audio data")
                 return None
 
-        # Extract exactly chunk_bytes
         chunk = self._buffer[:chunk_bytes]
         self._buffer = self._buffer[chunk_bytes:]
-        self._audio_data.append(chunk)
         return chunk
 
-    async def stop(self) -> bytes:
-        """Stop recording and return all captured audio."""
+    async def stop(self) -> None:
+        """Stop recording."""
         if self._process:
             log("Stopping arecord...")
             self._process.terminate()
@@ -193,66 +177,150 @@ class AudioRecorder:
                 await self._process.wait()
             self._process = None
 
-        total_bytes = sum(len(d) for d in self._audio_data)
-        log(f"Recorded {total_bytes} bytes ({total_bytes / 32000:.1f}s of audio)")
-        return b"".join(self._audio_data)
 
-    def get_wav_bytes(self, raw_audio: bytes) -> bytes:
-        """Convert raw PCM to WAV format."""
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit
-            wf.setframerate(self._config.sample_rate)
-            wf.writeframes(raw_audio)
-        return buffer.getvalue()
-
-
-async def transcribe_audio(config: Config, wav_data: bytes) -> str | None:
-    """Send audio to faster-whisper server for transcription."""
-    if httpx is None:
-        emit("error", error="httpx not installed. Run: pip install httpx")
-        return None
-
-    # Convert ws:// to http:// if needed
-    endpoint = config.endpoint
-    if endpoint.startswith("ws://"):
-        endpoint = endpoint.replace("ws://", "http://", 1)
-    elif endpoint.startswith("wss://"):
-        endpoint = endpoint.replace("wss://", "https://", 1)
-
-    # Use OpenAI-compatible endpoint
+def build_ws_url(config: Config) -> str:
+    """Build WebSocket URL from endpoint config."""
+    endpoint = config.endpoint.strip()
+    
+    # Handle http:// -> ws:// conversion
+    if endpoint.startswith("http://"):
+        endpoint = "ws://" + endpoint[7:]
+    elif endpoint.startswith("https://"):
+        endpoint = "wss://" + endpoint[8:]
+    elif not endpoint.startswith("ws://") and not endpoint.startswith("wss://"):
+        endpoint = "ws://" + endpoint
+    
+    # Ensure path
     if "/v1/audio/transcriptions" not in endpoint:
         endpoint = endpoint.rstrip("/") + "/v1/audio/transcriptions"
+    
+    # Add query params for language/model if specified
+    params = []
+    if config.language:
+        params.append(f"language={config.language}")
+    if config.model:
+        params.append(f"model={config.model}")
+    
+    if params:
+        separator = "&" if "?" in endpoint else "?"
+        endpoint += separator + "&".join(params)
+    
+    return endpoint
 
-    log(f"Sending audio to: {endpoint}")
+
+async def transcribe_stream(config: Config) -> None:
+    """Main transcription loop with WebSocket streaming and VAD."""
+    log(f"Starting with config: endpoint={config.endpoint}, model={config.model}, "
+        f"language={config.language}, vad_silence={config.vad_silence_threshold}s, "
+        f"min_recording={config.min_recording_time}s")
+
+    vad = VoiceActivityDetector(config)
+    recorder = AudioRecorder(config)
+    stop_event = asyncio.Event()
+    ws_url = build_ws_url(config)
+    
+    log(f"WebSocket URL: {ws_url}")
+    emit("connected")
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            files = {"file": ("audio.wav", wav_data, "audio/wav")}
-            data: dict[str, Any] = {
-                "model": config.model,
-                "response_format": "json",
-            }
-            if config.language:
-                data["language"] = config.language
+        # Connect to WebSocket
+        async with websockets.connect(ws_url, max_size=None) as ws:
+            log("WebSocket connected")
+            
+            await recorder.start()
+            emit("ready")
 
-            response = await client.post(endpoint, files=files, data=data)
-            response.raise_for_status()
+            # Start stdin monitor task
+            stdin_task = asyncio.create_task(check_stdin_stop(stop_event))
+            
+            # Start WebSocket receiver task
+            receiver_task = asyncio.create_task(receive_transcriptions(ws, stop_event))
 
-            result = response.json()
-            text = result.get("text", "").strip()
-            log(f"Transcription result: {text[:50]}...")
-            return text
+            frame_count = 0
+            speech_frames = 0
+            last_text = ""
 
-    except httpx.ConnectError:
+            # Recording loop with VAD
+            while not stop_event.is_set():
+                audio_data = await recorder.read_chunk()
+                if audio_data is None:
+                    continue
+
+                frame_count += 1
+
+                # Process with VAD
+                audio_array = np.frombuffer(audio_data, dtype=np.int16)
+                is_voice, should_stop = vad.process(audio_array)
+
+                if is_voice:
+                    speech_frames += 1
+
+                # Send audio chunk to WebSocket (raw s16le PCM)
+                try:
+                    await ws.send(audio_data)
+                except ConnectionClosed:
+                    log("WebSocket connection closed during send")
+                    break
+
+                # Log progress every 100 frames (~1.6 seconds)
+                if frame_count % 100 == 0:
+                    log(f"Frame {frame_count}: speech_frames={speech_frames}, is_voice={is_voice}")
+
+                # Check if VAD detected extended silence after speech
+                if should_stop:
+                    log(f"VAD stopped after {frame_count} frames, {speech_frames} speech frames")
+                    emit("vad_stopped")
+                    break
+
+            # Stop recording
+            await recorder.stop()
+            stdin_task.cancel()
+            
+            # Close WebSocket gracefully to get final transcription
+            log("Closing WebSocket connection...")
+            await ws.close()
+            
+            # Wait for receiver to finish
+            try:
+                final_text = await asyncio.wait_for(receiver_task, timeout=5.0)
+                if final_text:
+                    emit("final", text=final_text)
+                else:
+                    emit("final", text="")
+            except asyncio.TimeoutError:
+                log("Timeout waiting for final transcription")
+                emit("final", text="")
+
+    except ConnectionRefusedError:
         emit("error", error="Cannot connect to faster-whisper server. Is it running?")
-    except httpx.HTTPStatusError as e:
-        emit("error", error=f"Server error: {e.response.status_code} - {e.response.text[:100]}")
     except Exception as e:
+        log(f"Error in transcription loop: {e}")
         emit("error", error=str(e))
+        await recorder.stop()
 
-    return None
+
+async def receive_transcriptions(ws, stop_event: asyncio.Event) -> str:
+    """Receive transcription messages from WebSocket."""
+    last_text = ""
+    try:
+        async for message in ws:
+            if stop_event.is_set():
+                break
+            try:
+                data = json.loads(message)
+                text = data.get("text", "").strip()
+                if text and text != last_text:
+                    last_text = text
+                    emit("partial", text=text)
+                    log(f"Transcription: {text[:60]}...")
+            except json.JSONDecodeError:
+                log(f"Non-JSON message: {message[:100]}")
+    except ConnectionClosed:
+        log("WebSocket closed by server")
+    except Exception as e:
+        log(f"Receiver error: {e}")
+    
+    return last_text
 
 
 async def check_stdin_stop(stop_event: asyncio.Event) -> None:
@@ -275,81 +343,12 @@ async def check_stdin_stop(stop_event: asyncio.Event) -> None:
         log(f"stdin monitor error: {e}")
 
 
-async def transcribe_stream(config: Config) -> None:
-    """Main transcription loop with VAD."""
-    log(f"Starting with config: endpoint={config.endpoint}, model={config.model}, "
-        f"language={config.language}, vad_silence={config.vad_silence_threshold}s, "
-        f"min_recording={config.min_recording_time}s")
-
-    vad = VoiceActivityDetector(config)
-    recorder = AudioRecorder(config)
-    stop_event = asyncio.Event()
-
-    emit("connected")
-
-    try:
-        await recorder.start()
-        emit("ready")
-
-        # Start stdin monitor task
-        stdin_task = asyncio.create_task(check_stdin_stop(stop_event))
-
-        frame_count = 0
-        speech_frames = 0
-
-        # Recording loop with VAD
-        while not stop_event.is_set():
-            audio_data = await recorder.read_chunk()
-            if audio_data is None:
-                continue
-
-            frame_count += 1
-
-            # Process with VAD
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            is_voice, should_stop = vad.process(audio_array)
-
-            if is_voice:
-                speech_frames += 1
-
-            # Log progress every 100 frames (~1.6 seconds)
-            if frame_count % 100 == 0:
-                log(f"Frame {frame_count}: speech_frames={speech_frames}, is_voice={is_voice}")
-
-            # Check if VAD detected extended silence after speech
-            if should_stop:
-                log(f"VAD stopped after {frame_count} frames, {speech_frames} speech frames")
-                emit("vad_stopped")
-                break
-
-        # Stop recording and get audio
-        raw_audio = await recorder.stop()
-        stdin_task.cancel()
-
-        if not raw_audio:
-            log("No audio data recorded")
-            emit("final", text="")
-            return
-
-        # Convert to WAV and transcribe
-        emit("partial", text="Processing...")
-        wav_data = recorder.get_wav_bytes(raw_audio)
-
-        text = await transcribe_audio(config, wav_data)
-        emit("final", text=text or "")
-
-    except Exception as e:
-        log(f"Error in transcription loop: {e}")
-        emit("error", error=str(e))
-        await recorder.stop()
-
-
 def parse_args() -> Config:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="ECodeWhisper voice transcription")
-    parser.add_argument("--endpoint", default="http://localhost:4445/v1/audio/transcriptions")
-    parser.add_argument("--model", default="small")
-    parser.add_argument("--language", default="en")
+    parser.add_argument("--endpoint", default="ws://localhost:4445/v1/audio/transcriptions")
+    parser.add_argument("--model", default="")
+    parser.add_argument("--language", default="es")
     parser.add_argument("--vad-silence", type=float, default=1.5)
     parser.add_argument("--vad-threshold", type=float, default=0.5)
     parser.add_argument("--sample-rate", type=int, default=16000)
