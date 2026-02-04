@@ -1,8 +1,8 @@
 {
   "name": "ecodewhisper",
   "displayName": "ECodeWhisper",
-  "description": "Eager Code Whisper - Voice-to-text for Cursor/VS Code using faster-whisper with TEN VAD for automatic silence detection. Python-powered real-time transcription.",
-  "version": "0.1.2",
+  "description": "Eager Code Whisper - Real-time voice-to-text for Cursor/VS Code with WebSocket streaming, faster-whisper and TEN VAD. Text appears as you speak.",
+  "version": "0.3.2",
   "publisher": "damvolkov",
   "author": {
     "name": "damvolkov",
@@ -28,7 +28,10 @@
     "whisper",
     "faster-whisper",
     "vad",
-    "voice-activity-detection"
+    "voice-activity-detection",
+    "websocket",
+    "streaming",
+    "realtime"
   ],
   "activationEvents": [
     "onStartupFinished"
@@ -68,33 +71,25 @@
         },
         "ecodewhisper.whisperEndpoint": {
           "type": "string",
-          "default": "http://localhost:4445/v1/audio/transcriptions",
-          "description": "HTTP endpoint for faster-whisper server"
+          "default": "ws://localhost:4445/v1/audio/transcriptions",
+          "description": "WebSocket endpoint for faster-whisper server (ws:// or wss://)"
         },
         "ecodewhisper.model": {
           "type": "string",
-          "default": "small",
-          "enum": [
-            "tiny",
-            "base",
-            "small",
-            "medium",
-            "large-v2",
-            "large-v3"
-          ],
-          "description": "Whisper model to use for transcription"
+          "default": "",
+          "description": "Whisper model to use (e.g., 'small', 'large-v3', 'Systran/faster-whisper-large-v3'). Leave empty to use server default."
         },
         "ecodewhisper.language": {
           "type": "string",
-          "default": "en",
+          "default": "es",
           "description": "Language code for transcription (e.g., 'en', 'es', 'fr'). Leave empty for auto-detection."
         },
         "ecodewhisper.vadSilenceThreshold": {
           "type": "number",
           "default": 1.5,
           "minimum": 0.3,
-          "maximum": 5,
-          "description": "Seconds of silence before VAD stops recording automatically"
+          "maximum": 10,
+          "description": "Seconds of silence before VAD stops recording automatically (0.3-10s)"
         },
         "ecodewhisper.vadThreshold": {
           "type": "number",
@@ -106,15 +101,18 @@
         "ecodewhisper.sampleRate": {
           "type": "number",
           "default": 16000,
-          "enum": [
-            16000
-          ],
+          "enum": [16000],
           "description": "Audio sample rate (16kHz required for TEN VAD)"
         },
         "ecodewhisper.autoInsert": {
           "type": "boolean",
           "default": true,
           "description": "Automatically insert transcription at cursor position"
+        },
+        "ecodewhisper.streamingInsert": {
+          "type": "boolean",
+          "default": true,
+          "description": "Insert text in real-time as you speak (on the fly transcription)"
         },
         "ecodewhisper.showPartialResults": {
           "type": "boolean",

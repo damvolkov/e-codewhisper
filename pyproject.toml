@@ -1,14 +1,14 @@
 [project]
 name = "codewhisper"
-version = "0.1.0"
-description = "Voice-to-text for Cursor/VS Code using faster-whisper with TEN VAD"
+version = "0.3.2"
+description = "Voice-to-text for Cursor/VS Code with WebSocket streaming, faster-whisper and TEN VAD"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.12"
 authors = [
     { name = "Damien", email = "damien@example.com" }
 ]
-keywords = ["voice", "speech", "transcription", "whisper", "vad", "vscode", "cursor"]
+keywords = ["voice", "speech", "transcription", "whisper", "vad", "vscode", "cursor", "websocket", "streaming"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Plugins",
@@ -22,7 +22,7 @@ classifiers = [
 
 dependencies = [
     "numpy>=1.26.0",
-    "httpx>=0.28.0",
+    "websockets>=12.0",
     "ten-vad",
 ]
 
