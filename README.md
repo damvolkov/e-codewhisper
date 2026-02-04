@@ -1,6 +1,11 @@
-# ECodeWhisper
+<div align="center">
+  <img src="images/codewhisper.png" alt="ECodeWhisper Logo" width="128">
+  <h1>ECodeWhisper</h1>
+  <p><strong>Real-time voice-to-text for VS Code and Cursor</strong></p>
+  <p>Speak and see your words appear instantly as you talk.</p>
+</div>
 
-Real-time voice-to-text for VS Code and Cursor. Speak and see your words appear instantly as you talk.
+---
 
 Uses [WhisperLive](https://github.com/collabora/WhisperLive) as the speech-to-text backend with [TEN VAD](https://github.com/TEN-framework/ten-vad) for automatic silence detection.
 
