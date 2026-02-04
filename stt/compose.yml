@@ -1,15 +1,8 @@
-# CodeWhisper faster-whisper STT Service
-# Default configuration for local transcription server
-#
-# Usage:
-#   docker compose up -d
-#
-# Environment variables can be customized via .env file or direct override
-
 services:
   stt:
     image: fedirz/faster-whisper-server:latest-cuda
-    container_name: codewhisper-stt
+    hostname: stt
+    container_name: stt
     ports:
       - "${STT_PORT:-4445}:8000"
     volumes:

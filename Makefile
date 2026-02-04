@@ -40,6 +40,18 @@ test-recording:
 test-extension:
 	./scripts/test-extension.sh
 
+# Test WebSocket streaming transcription (requires ffmpeg, websocat, running STT server)
+test-websocket:
+	@echo "Testing WebSocket streaming transcription..."
+	@echo "Speak into microphone. Press Ctrl+C to stop."
+	@ffmpeg -loglevel quiet -f alsa -i default -ac 1 -ar 16000 -f s16le - | websocat --binary ws://localhost:4445/v1/audio/transcriptions
+
+# Test WebSocket with Spanish language
+test-websocket-es:
+	@echo "Testing WebSocket streaming (Spanish)..."
+	@echo "Habla al micrófono. Pulsa Ctrl+C para parar."
+	@ffmpeg -loglevel quiet -f alsa -i default -ac 1 -ar 16000 -f s16le - | websocat --binary "ws://localhost:4445/v1/audio/transcriptions?language=es"
+
 # Compile TypeScript extension
 build:
 	npm run compile
@@ -86,23 +98,25 @@ uninstall-stt:
 
 # Show help
 help:
-	@echo "CodeWhisper - Voice-to-text extension"
+	@echo "CodeWhisper - Voice-to-text extension with WebSocket streaming"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
-	@echo "  install      Install production dependencies"
-	@echo "  dev          Install with dev dependencies"
-	@echo "  lint         Run ruff linter"
-	@echo "  format       Format code with ruff"
-	@echo "  typecheck    Run ty type checker"
-	@echo "  test         Run pytest tests"
-	@echo "  test-client  Run TypeScript extension tests"
+	@echo "  install         Install production dependencies"
+	@echo "  dev             Install with dev dependencies"
+	@echo "  lint            Run ruff linter"
+	@echo "  format          Format code with ruff"
+	@echo "  typecheck       Run ty type checker"
+	@echo "  test            Run pytest tests"
+	@echo "  test-client     Run TypeScript extension tests"
 	@echo "  test-recording  Test microphone recording and transcription"
-	@echo "  build        Compile TypeScript extension"
-	@echo "  package      Build VSIX package"
-	@echo "  watch        Watch mode for development"
-	@echo "  clean        Remove build artifacts"
-	@echo "  install-stt  Install faster-whisper Docker service"
-	@echo "  uninstall-stt Uninstall faster-whisper service"
-	@echo "  help         Show this help"
+	@echo "  test-websocket  Test WebSocket streaming (requires ffmpeg, websocat)"
+	@echo "  test-websocket-es  Test WebSocket streaming in Spanish"
+	@echo "  build           Compile TypeScript extension"
+	@echo "  package         Build VSIX package"
+	@echo "  watch           Watch mode for development"
+	@echo "  clean           Remove build artifacts"
+	@echo "  install-stt     Install faster-whisper Docker service"
+	@echo "  uninstall-stt   Uninstall faster-whisper service"
+	@echo "  help            Show this help"

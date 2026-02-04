@@ -23,6 +23,8 @@ let currentTranscription = '';
 let transcriptionBuffer = '';
 let recordingStartTime: number | undefined;
 let recordingTimerInterval: NodeJS.Timeout | undefined;
+let partialDecorator: vscode.TextEditorDecorationType | undefined;
+let lastInsertedRange: vscode.Range | undefined;
 
 export function activate(context: vscode.ExtensionContext) {
     outputChannel = vscode.window.createOutputChannel('ECodeWhisper');
@@ -35,6 +37,14 @@ export function activate(context: vscode.ExtensionContext) {
     statusBarItem.command = 'ecodewhisper.toggleRecording';
     updateStatusBar();
     statusBarItem.show();
+
+    // Create decorator for partial transcription preview
+    partialDecorator = vscode.window.createTextEditorDecorationType({
+        after: {
+            color: new vscode.ThemeColor('editorGhostText.foreground'),
+            fontStyle: 'italic',
+        }
+    });
 
     const toggleCommand = vscode.commands.registerCommand(
         'ecodewhisper.toggleRecording',
@@ -58,15 +68,16 @@ function getConfig() {
     const config = vscode.workspace.getConfiguration('ecodewhisper');
     return {
         pythonPath: config.get<string>('pythonPath') || 'python3',
-        whisperEndpoint: config.get<string>('whisperEndpoint') || 'http://localhost:4445/v1/audio/transcriptions',
-        model: config.get<string>('model') || 'small',
-        language: config.get<string>('language') || 'en',
+        whisperEndpoint: config.get<string>('whisperEndpoint') || 'ws://localhost:4445/v1/audio/transcriptions',
+        model: config.get<string>('model') || '',
+        language: config.get<string>('language') || 'es',
         vadSilenceThreshold: config.get<number>('vadSilenceThreshold') || 1.5,
         vadThreshold: config.get<number>('vadThreshold') || 0.5,
         sampleRate: config.get<number>('sampleRate') || 16000,
         autoInsert: config.get<boolean>('autoInsert') ?? true,
         showPartialResults: config.get<boolean>('showPartialResults') ?? true,
         minRecordingTime: config.get<number>('minRecordingTime') || 1.0,
+        streamingInsert: config.get<boolean>('streamingInsert') ?? true,
     };
 }
 
@@ -85,7 +96,7 @@ function updateStatusBar() {
             break;
         case RecordingState.Connecting:
             statusBarItem.text = '$(loading~spin) Connecting...';
-            statusBarItem.tooltip = 'Connecting to microphone';
+            statusBarItem.tooltip = 'Connecting to microphone and WebSocket';
             statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             break;
         case RecordingState.Recording:
@@ -100,8 +111,8 @@ function updateStatusBar() {
             statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
             break;
         case RecordingState.Transcribing:
-            statusBarItem.text = '$(loading~spin) Transcribing...';
-            statusBarItem.tooltip = 'Processing transcription';
+            statusBarItem.text = '$(loading~spin) Finishing...';
+            statusBarItem.tooltip = 'Finishing transcription';
             statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
             break;
     }
@@ -141,11 +152,13 @@ async function startRecording(context: vscode.ExtensionContext) {
     currentTranscription = '';
     transcriptionBuffer = '';
     recordingStartTime = undefined;
+    lastInsertedRange = undefined;
 
     const pythonScript = path.join(context.extensionPath, 'src', 'server', 'python', 'codewhisper.py');
     
     outputChannel.appendLine(`Python script path: ${pythonScript}`);
     outputChannel.appendLine(`Python path: ${config.pythonPath}`);
+    outputChannel.appendLine(`WebSocket endpoint: ${config.whisperEndpoint}`);
     
     const args = [
         pythonScript,
@@ -176,7 +189,6 @@ async function startRecording(context: vscode.ExtensionContext) {
         pythonProcess.stderr?.on('data', (data: Buffer) => {
             const text = data.toString().trim();
             outputChannel.appendLine(`[stderr] ${text}`);
-            // Show critical errors to user
             if (text.includes('Error') || text.includes('error') || text.includes('Traceback')) {
                 outputChannel.show(true);
             }
@@ -215,13 +227,12 @@ function handlePythonMessage(line: string, config: ReturnType<typeof getConfig>)
 
         switch (msg.type) {
             case 'connected':
-                outputChannel.appendLine('Audio device connected');
+                outputChannel.appendLine('WebSocket connected');
                 break;
                 
             case 'ready':
                 setRecordingState(RecordingState.Recording);
                 recordingStartTime = Date.now();
-                // Start the recording timer
                 if (recordingTimerInterval) {
                     clearInterval(recordingTimerInterval);
                 }
@@ -232,14 +243,17 @@ function handlePythonMessage(line: string, config: ReturnType<typeof getConfig>)
             case 'partial':
                 if (msg.text && config.showPartialResults) {
                     transcriptionBuffer = msg.text;
-                    showPartialTranscription(transcriptionBuffer);
+                    if (config.streamingInsert && config.autoInsert) {
+                        updateStreamingText(msg.text);
+                    } else {
+                        showPartialTranscription(msg.text);
+                    }
                 }
                 break;
 
             case 'final':
                 if (msg.text) {
                     currentTranscription = msg.text;
-                    transcriptionBuffer = '';
                     outputChannel.appendLine(`Final text received: ${msg.text}`);
                 }
                 break;
@@ -259,15 +273,46 @@ function handlePythonMessage(line: string, config: ReturnType<typeof getConfig>)
                 break;
         }
     } catch {
-        // Non-JSON output, log it
         if (line.trim()) {
             outputChannel.appendLine(`[log] ${line}`);
         }
     }
 }
 
+async function updateStreamingText(text: string) {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+        showPartialTranscription(text);
+        return;
+    }
+
+    // If we have a previous insertion, replace it; otherwise insert at cursor
+    await editor.edit((editBuilder) => {
+        if (lastInsertedRange) {
+            editBuilder.replace(lastInsertedRange, text);
+        } else {
+            editBuilder.insert(editor.selection.active, text);
+        }
+    }, { undoStopBefore: !lastInsertedRange, undoStopAfter: false });
+
+    // Calculate the new range of inserted text
+    const startPos = lastInsertedRange ? lastInsertedRange.start : editor.selection.active;
+    const lines = text.split('\n');
+    let endLine = startPos.line + lines.length - 1;
+    let endChar = lines.length === 1 
+        ? startPos.character + text.length 
+        : lines[lines.length - 1].length;
+    
+    lastInsertedRange = new vscode.Range(startPos, new vscode.Position(endLine, endChar));
+    
+    // Show status
+    const preview = text.length > 40 ? text.slice(-40) + '...' : text;
+    vscode.window.setStatusBarMessage(`📝 ${preview}`, 1500);
+}
+
 function showPartialTranscription(text: string) {
-    vscode.window.setStatusBarMessage(`📝 ${text.slice(-50)}...`, 2000);
+    const preview = text.length > 50 ? '...' + text.slice(-50) : text;
+    vscode.window.setStatusBarMessage(`📝 ${preview}`, 2000);
 }
 
 function cleanupRecording() {
@@ -283,11 +328,9 @@ async function stopRecording() {
     if (pythonProcess) {
         setRecordingState(RecordingState.Transcribing);
         
-        // Send STOP command via stdin
         pythonProcess.stdin?.write('STOP\n');
         outputChannel.appendLine('Sent STOP command');
         
-        // Give it time to finish gracefully, then force kill
         setTimeout(() => {
             if (pythonProcess && !pythonProcess.killed) {
                 outputChannel.appendLine('Force killing process');
@@ -303,8 +346,20 @@ function cancelRecording() {
         pythonProcess.kill('SIGKILL');
     }
     cleanupRecording();
+    
+    // Remove any partial text that was inserted
+    if (lastInsertedRange) {
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+            editor.edit((editBuilder) => {
+                editBuilder.delete(lastInsertedRange!);
+            });
+        }
+    }
+    
     currentTranscription = '';
     transcriptionBuffer = '';
+    lastInsertedRange = undefined;
     setRecordingState(RecordingState.Idle);
     vscode.window.setStatusBarMessage('Recording cancelled', 2000);
 }
@@ -316,8 +371,18 @@ async function finishTranscription(config: ReturnType<typeof getConfig>) {
     recordingStartTime = undefined;
 
     if (!text) {
+        // Remove any partial insertions if no final text
+        if (lastInsertedRange) {
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+                await editor.edit((editBuilder) => {
+                    editBuilder.delete(lastInsertedRange!);
+                });
+            }
+        }
         vscode.window.setStatusBarMessage('No speech detected', 2000);
         outputChannel.appendLine('No transcription text to insert');
+        lastInsertedRange = undefined;
         return;
     }
 
@@ -326,7 +391,17 @@ async function finishTranscription(config: ReturnType<typeof getConfig>) {
     // Copy to clipboard
     await vscode.env.clipboard.writeText(text);
 
-    if (config.autoInsert) {
+    // If streaming insert was used, the text is already there - just finalize
+    if (config.streamingInsert && config.autoInsert && lastInsertedRange) {
+        // Make sure final text matches what was inserted
+        const editor = vscode.window.activeTextEditor;
+        if (editor) {
+            await editor.edit((editBuilder) => {
+                editBuilder.replace(lastInsertedRange!, text);
+            }, { undoStopBefore: false, undoStopAfter: true });
+        }
+        vscode.window.setStatusBarMessage(`✅ "${text.slice(0, 30)}${text.length > 30 ? '...' : ''}"`, 3000);
+    } else if (config.autoInsert) {
         const editor = vscode.window.activeTextEditor;
         if (editor) {
             await editor.edit((editBuilder) => {
@@ -339,6 +414,8 @@ async function finishTranscription(config: ReturnType<typeof getConfig>) {
     } else {
         vscode.window.setStatusBarMessage(`📋 Copied to clipboard`, 3000);
     }
+    
+    lastInsertedRange = undefined;
 }
 
 export function deactivate() {
@@ -348,4 +425,7 @@ export function deactivate() {
         pythonProcess = null;
     }
     cleanupRecording();
+    if (partialDecorator) {
+        partialDecorator.dispose();
+    }
 }
