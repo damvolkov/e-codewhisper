@@ -1,4 +1,4 @@
-.PHONY: all install dev lint format typecheck test build clean package help
+.PHONY: all install dev lint format typecheck test build clean package help install-stt install-stt-cpu
 
 # Default target
 all: install lint typecheck test build
@@ -82,19 +82,23 @@ check-deps:
 	@dpkg -l | grep -q libc++1 && echo "✓ libc++1 installed" || echo "✗ libc++1 NOT installed - run: sudo apt install libc++1"
 	@command -v arecord >/dev/null && echo "✓ arecord installed" || echo "✗ arecord NOT installed - run: sudo apt install alsa-utils"
 	@command -v docker >/dev/null && echo "✓ docker installed" || echo "✗ docker NOT installed"
-	@curl -s http://localhost:4445/health >/dev/null 2>&1 && echo "✓ faster-whisper server running" || echo "✗ faster-whisper server NOT running"
+	@python -c "import socket; s=socket.socket(); s.connect(('localhost', 9090)); s.close()" 2>/dev/null && echo "✓ WhisperLive server running" || echo "✗ WhisperLive server NOT running on port 9090"
 
 # Install system dependencies (requires sudo)
 install-deps:
 	sudo apt update && sudo apt install -y libc++1 alsa-utils
 
-# Install STT service (requires sudo)
+# Install STT service with GPU (requires sudo, NVIDIA GPU)
 install-stt:
-	./resources/install-stt-service.sh
+	./stt/install.sh
+
+# Install STT service with CPU only (requires sudo)
+install-stt-cpu:
+	./stt/install.sh --cpu
 
 # Uninstall STT service
 uninstall-stt:
-	./resources/install-stt-service.sh --uninstall
+	./stt/install.sh --uninstall
 
 # Show help
 help:
@@ -117,6 +121,7 @@ help:
 	@echo "  package         Build VSIX package"
 	@echo "  watch           Watch mode for development"
 	@echo "  clean           Remove build artifacts"
-	@echo "  install-stt     Install faster-whisper Docker service"
-	@echo "  uninstall-stt   Uninstall faster-whisper service"
+	@echo "  install-stt     Install WhisperLive STT service (GPU)"
+	@echo "  install-stt-cpu Install WhisperLive STT service (CPU only)"
+	@echo "  uninstall-stt   Uninstall STT service"
 	@echo "  help            Show this help"

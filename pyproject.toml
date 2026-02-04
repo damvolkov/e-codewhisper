@@ -1,5 +1,5 @@
 [project]
-name = "codewhisper"
+name = "ecodewhisper"
 version = "0.3.2"
 description = "Voice-to-text for Cursor/VS Code with WebSocket streaming, faster-whisper and TEN VAD"
 readme = "README.md"

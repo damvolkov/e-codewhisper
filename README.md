@@ -70,26 +70,51 @@ Open Settings (`Ctrl+,`) and search for "ecodewhisper":
 
 ## Server Setup
 
-You need a running WhisperLive server. The extension includes an installer:
+You need a running WhisperLive server. The extension includes an installer.
+
+### Using Make (recommended)
 
 ```bash
-# From extension directory
-./stt/install.sh --model small --language en --port 9090
+# GPU version (requires NVIDIA GPU)
+make install-stt
+
+# CPU version (no GPU required, slower)
+make install-stt-cpu
+
+# Uninstall
+make uninstall-stt
 ```
 
-Or manually with Docker:
+### Using the installer directly
 
 ```bash
+# GPU version (default)
+./stt/install.sh --model small --language en
+
+# CPU version
+./stt/install.sh --cpu --model small --language en
+
+# Custom port
+./stt/install.sh --port 9090
+
+# Uninstall
+./stt/install.sh --uninstall
+```
+
+### Manual Docker setup
+
+**GPU version:**
+```bash
 docker run -d --gpus all -p 9090:9090 \
+  -e WHISPER_MODEL=small \
   ghcr.io/collabora/whisperlive-gpu:latest
 ```
 
-For a specific model:
-
+**CPU version:**
 ```bash
-docker run -d --gpus all -p 9090:9090 \
-  -e WHISPER_MODEL=large-v3 \
-  ghcr.io/collabora/whisperlive-gpu:latest
+docker run -d -p 9090:9090 \
+  -e WHISPER_MODEL=small \
+  ghcr.io/collabora/whisperlive-cpu:latest
 ```
 
 Verify it's running:
@@ -121,6 +146,26 @@ python -c "import socket; s=socket.socket(); s.connect(('localhost', 9090)); pri
 **Text not appearing**
 - Check Output panel: View → Output → ECodeWhisper
 - Verify Python path in settings
+
+## Publishing to Marketplace
+
+```bash
+# Build the VSIX package
+make package
+
+# Login to VS Code Marketplace (first time only)
+npx vsce login damvolkov
+
+# Publish
+npx vsce publish
+
+# Or publish with version bump
+npx vsce publish patch   # 0.3.2 -> 0.3.3
+npx vsce publish minor   # 0.3.2 -> 0.4.0
+npx vsce publish major   # 0.3.2 -> 1.0.0
+```
+
+You need a Personal Access Token from [Azure DevOps](https://dev.azure.com/) with Marketplace (Publish) scope.
 
 ## License
 
