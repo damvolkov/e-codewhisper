@@ -2,12 +2,12 @@
 
 Real-time voice-to-text for VS Code and Cursor. Speak and see your words appear instantly as you talk.
 
-Uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) via WebSocket streaming with [TEN VAD](https://github.com/TEN-framework/ten-vad) for automatic silence detection.
+Uses [WhisperLive](https://github.com/collabora/WhisperLive) as the speech-to-text backend with [TEN VAD](https://github.com/TEN-framework/ten-vad) for automatic silence detection.
 
 ## Quick Start
 
 1. Install the extension
-2. Start your faster-whisper server (see [Server Setup](#server-setup))
+2. Start your WhisperLive server (see [Server Setup](#server-setup))
 3. Press `Ctrl+Shift+E` and start speaking
 4. Text appears in real-time as you talk
 
@@ -40,9 +40,9 @@ Open Settings (`Ctrl+,`) and search for "ecodewhisper":
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `ecodewhisper.whisperEndpoint` | `ws://localhost:4445/v1/audio/transcriptions` | WebSocket server URL |
-| `ecodewhisper.language` | `es` | Language code (`en`, `es`, `fr`, etc.) |
-| `ecodewhisper.model` | `` | Whisper model (leave empty for server default) |
+| `ecodewhisper.whisperEndpoint` | `ws://localhost:9090` | WhisperLive WebSocket server URL |
+| `ecodewhisper.language` | `en` | Language code (`en`, `es`, `fr`, etc.) |
+| `ecodewhisper.model` | `small` | Whisper model (`tiny`, `base`, `small`, `medium`, `large-v2`, `large-v3`) |
 | `ecodewhisper.vadSilenceThreshold` | `1.5` | Seconds of silence before auto-stop (0.3-10) |
 | `ecodewhisper.vadThreshold` | `0.5` | Voice detection sensitivity (0.1-0.9) |
 | `ecodewhisper.minRecordingTime` | `1.0` | Minimum recording time before VAD can stop |
@@ -55,9 +55,9 @@ Open Settings (`Ctrl+,`) and search for "ecodewhisper":
 
 ```json
 {
-    "ecodewhisper.language": "en",
-    "ecodewhisper.vadSilenceThreshold": 2.0,
-    "ecodewhisper.streamingInsert": true
+    "ecodewhisper.whisperEndpoint": "ws://localhost:9090",
+    "ecodewhisper.language": "es",
+    "ecodewhisper.model": "large-v3"
 }
 ```
 
@@ -66,44 +66,57 @@ Open Settings (`Ctrl+,`) and search for "ecodewhisper":
 - **Linux** (Ubuntu 22.04+)
 - **Python 3.12+** with dependencies (auto-installed)
 - **ALSA** audio (`sudo apt install alsa-utils`)
-- **faster-whisper server** running (see below)
+- **WhisperLive server** running with NVIDIA GPU (see below)
 
 ## Server Setup
 
-You need a running faster-whisper server. The extension includes an installer:
+You need a running WhisperLive server. The extension includes an installer:
 
 ```bash
 # From extension directory
-./stt/install.sh --model large-v3 --language es --port 4445
+./stt/install.sh --model small --language en --port 9090
 ```
 
 Or manually with Docker:
 
 ```bash
-docker run -d --gpus all -p 4445:8000 \
-  -e WHISPER__MODEL=Systran/faster-whisper-large-v3 \
-  -e WHISPER__LANGUAGE=es \
-  fedirz/faster-whisper-server:latest-cuda
+docker run -d --gpus all -p 9090:9090 \
+  ghcr.io/collabora/whisperlive-gpu:latest
+```
+
+For a specific model:
+
+```bash
+docker run -d --gpus all -p 9090:9090 \
+  -e WHISPER_MODEL=large-v3 \
+  ghcr.io/collabora/whisperlive-gpu:latest
 ```
 
 Verify it's running:
 
 ```bash
-curl http://localhost:4445/health
+docker ps | grep stt
+docker logs stt
 ```
 
 ## Troubleshooting
 
 **"Cannot connect to server"**
 ```bash
-curl http://localhost:4445/health  # Should return OK
-docker ps | grep stt               # Check if container running
+docker ps | grep stt                # Check if container running
+docker logs stt                     # Check server logs
+python -c "import socket; s=socket.socket(); s.connect(('localhost', 9090)); print('OK')"
 ```
 
 **"No speech detected"**
 - Test microphone: `arecord -d 3 test.wav && aplay test.wav`
 - Lower `vadThreshold` for quiet voices
 - Check `alsamixer` for input levels
+
+**"Server timeout"**
+- First connection downloads the model (~3GB for large-v3)
+- Wait for model download to complete
+- Check logs: `docker logs -f stt`
 
 **Text not appearing**
 - Check Output panel: View → Output → ECodeWhisper
@@ -115,5 +128,5 @@ MIT
 
 ## Credits
 
-- [faster-whisper-server](https://github.com/fedirz/faster-whisper-server) (speaches)
+- [WhisperLive](https://github.com/collabora/WhisperLive) by Collabora
 - [TEN VAD](https://github.com/TEN-framework/ten-vad)
