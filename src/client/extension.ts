@@ -68,9 +68,9 @@ function getConfig() {
     const config = vscode.workspace.getConfiguration('ecodewhisper');
     return {
         pythonPath: config.get<string>('pythonPath') || 'python3',
-        whisperEndpoint: config.get<string>('whisperEndpoint') || 'ws://localhost:4445/v1/audio/transcriptions',
-        model: config.get<string>('model') || '',
-        language: config.get<string>('language') || 'es',
+        whisperEndpoint: config.get<string>('whisperEndpoint') || 'ws://localhost:9090',
+        model: config.get<string>('model') || 'small',
+        language: config.get<string>('language') || 'en',
         vadSilenceThreshold: config.get<number>('vadSilenceThreshold') || 1.5,
         vadThreshold: config.get<number>('vadThreshold') || 0.5,
         sampleRate: config.get<number>('sampleRate') || 16000,

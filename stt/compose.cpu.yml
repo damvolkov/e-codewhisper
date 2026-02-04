@@ -1,26 +1,16 @@
-# WhisperLive STT Service
-# Real-time speech-to-text with Collabora's WhisperLive
+# WhisperLive STT Service (CPU)
+# For systems without NVIDIA GPU
 
 services:
   stt:
-    image: ghcr.io/collabora/whisperlive-gpu:latest
-    hostname: stt
+    image: ghcr.io/collabora/whisperlive-cpu:latest
     container_name: stt
     ports:
       - "${STT_PORT:-9090}:9090"
     volumes:
       - ${STT_MODEL_CACHE:-./models}:/root/.cache/huggingface
     environment:
-      # WhisperLive uses faster_whisper backend by default
-      # Model will be downloaded on first run
       - WHISPER_MODEL=${WHISPER_MODEL:-small}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 9090)); s.close()"]

@@ -1,11 +1,9 @@
-"""Tests for codewhisper module."""
+"""Tests for codewhisper module (WhisperLive protocol)."""
 
 from __future__ import annotations
 
-import io
 import json
-import wave
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -13,8 +11,10 @@ import pytest
 from src.server.python.codewhisper import (
     AudioRecorder,
     Config,
+    audio_int16_to_float32,
+    build_whisperlive_config,
+    build_ws_url,
     emit,
-    transcribe_audio,
 )
 
 
@@ -22,43 +22,49 @@ from src.server.python.codewhisper import (
 
 
 def test_config_defaults() -> None:
-    """Test Config with default hop_size."""
+    """Test Config with default values."""
     config = Config(
-        endpoint="http://localhost:4445",
+        endpoint="ws://localhost:9090",
         model="small",
         language="en",
         vad_silence_threshold=1.5,
         vad_threshold=0.5,
         sample_rate=16000,
+        min_recording_time=1.0,
     )
     assert config.hop_size == 256
-    assert config.endpoint == "http://localhost:4445"
+    assert config.endpoint == "ws://localhost:9090"
     assert config.model == "small"
+    assert config.use_server_vad is True
 
 
-def test_config_custom_hop_size() -> None:
-    """Test Config with custom hop_size."""
+def test_config_custom_values() -> None:
+    """Test Config with custom values."""
     config = Config(
-        endpoint="http://localhost:4445",
+        endpoint="ws://localhost:9090",
         model="large-v3",
         language="es",
         vad_silence_threshold=2.0,
         vad_threshold=0.6,
         sample_rate=16000,
+        min_recording_time=1.0,
+        use_server_vad=False,
         hop_size=160,
     )
     assert config.hop_size == 160
+    assert config.use_server_vad is False
 
 
 def test_config_immutable() -> None:
     """Test that Config is immutable (frozen)."""
     config = Config(
-        endpoint="http://localhost:4445",
+        endpoint="ws://localhost:9090",
         model="small",
         language="en",
         vad_silence_threshold=1.5,
         vad_threshold=0.5,
         sample_rate=16000,
+        min_recording_time=1.0,
     )
     with pytest.raises(AttributeError):
         config.model = "base"  # type: ignore[misc]
@@ -100,6 +106,100 @@ def test_emit_unicode(capsys: pytest.CaptureFixture[str]) -> None:
     assert data["text"] == "こんにちは 你好 مرحبا"
 
 
+# --- build_ws_url tests ---
+
+
+@pytest.mark.parametrize(
+    ("input_url", "expected"),
+    [
+        ("ws://localhost:9090", "ws://localhost:9090"),
+        ("wss://localhost:9090", "wss://localhost:9090"),
+        ("http://localhost:9090", "ws://localhost:9090"),
+        ("https://localhost:9090", "wss://localhost:9090"),
+        ("localhost:9090", "ws://localhost:9090"),
+        ("ws://localhost:9090/v1/audio", "ws://localhost:9090"),  # Path stripped
+    ],
+)
+def test_build_ws_url(input_url: str, expected: str) -> None:
+    """Test WebSocket URL building."""
+    config = Config(
+        endpoint=input_url,
+        model="small",
+        language="en",
+        vad_silence_threshold=1.5,
+        vad_threshold=0.5,
+        sample_rate=16000,
+        min_recording_time=1.0,
+    )
+    assert build_ws_url(config) == expected
+
+
+# --- build_whisperlive_config tests ---
+
+
+def test_build_whisperlive_config() -> None:
+    """Test WhisperLive config message building."""
+    config = Config(
+        endpoint="ws://localhost:9090",
+        model="large-v3",
+        language="es",
+        vad_silence_threshold=1.5,
+        vad_threshold=0.5,
+        sample_rate=16000,
+        min_recording_time=1.0,
+        use_server_vad=True,
+    )
+    ws_config = build_whisperlive_config(config)
+    
+    assert "uid" in ws_config
+    assert ws_config["language"] == "es"
+    assert ws_config["task"] == "transcribe"
+    assert ws_config["model"] == "large-v3"
+    assert ws_config["use_vad"] is True
+
+
+def test_build_whisperlive_config_no_language() -> None:
+    """Test WhisperLive config without language."""
+    config = Config(
+        endpoint="ws://localhost:9090",
+        model="small",
+        language="",
+        vad_silence_threshold=1.5,
+        vad_threshold=0.5,
+        sample_rate=16000,
+        min_recording_time=1.0,
+    )
+    ws_config = build_whisperlive_config(config)
+    
+    assert ws_config["language"] is None
+    assert ws_config["model"] == "small"
+
+
+# --- audio_int16_to_float32 tests ---
+
+
+def test_audio_int16_to_float32() -> None:
+    """Test audio format conversion."""
+    # Create int16 samples
+    samples_int16 = np.array([0, 16384, -16384, 32767, -32768], dtype=np.int16)
+    audio_bytes = samples_int16.tobytes()
+    
+    result = audio_int16_to_float32(audio_bytes)
+    result_array = np.frombuffer(result, dtype=np.float32)
+    
+    np.testing.assert_array_almost_equal(
+        result_array,
+        [0.0, 0.5, -0.5, 0.999969, -1.0],
+        decimal=4,
+    )
+
+
+def test_audio_int16_to_float32_empty() -> None:
+    """Test audio conversion with empty input."""
+    result = audio_int16_to_float32(b"")
+    assert result == b""
+
+
 # --- VoiceActivityDetector tests (with mocked TenVad) ---
 
 
@@ -107,12 +207,13 @@ def test_emit_unicode(capsys: pytest.CaptureFixture[str]) -> None:
 def vad_config() -> Config:
     """Create config for VAD tests."""
     return Config(
-        endpoint="http://localhost:4445",
+        endpoint="ws://localhost:9090",
         model="small",
         language="en",
         vad_silence_threshold=1.0,
         vad_threshold=0.5,
         sample_rate=16000,
+        min_recording_time=1.0,
         hop_size=256,
     )
 
@@ -136,7 +237,6 @@ def test_vad_process_voice_detected(vad_config: Config) -> None:
     """Test VAD when voice is detected."""
     with patch("src.server.python.codewhisper.TenVad") as MockTenVad:
         mock_vad_instance = MagicMock()
-        # TenVad.process() returns (probability, flags) where flags=1 means speech
         mock_vad_instance.process.return_value = (0.8, 1)
         MockTenVad.return_value = mock_vad_instance
         
@@ -156,20 +256,20 @@ def test_vad_process_silence_after_speech(vad_config: Config) -> None:
     """Test VAD stops after silence following speech."""
     with patch("src.server.python.codewhisper.TenVad") as MockTenVad:
         mock_vad_instance = MagicMock()
-        # flags=0 means no speech
         mock_vad_instance.process.return_value = (0.1, 0)
         MockTenVad.return_value = mock_vad_instance
         
         from src.server.python.codewhisper import VoiceActivityDetector
         vad = VoiceActivityDetector(vad_config)
         vad._has_speech = True
-        vad._silence_frames = 61  # One frame before max
+        vad._silence_frames = 61
+        vad._start_time = 0  # Bypass min_recording_time
         
         audio = np.zeros(256, dtype=np.int16)
         is_voice, should_stop = vad.process(audio)
         
         assert is_voice is False
-        assert should_stop is True  # Reached max silence frames
+        assert should_stop is True
         assert vad._silence_frames == 62
 
 
@@ -182,13 +282,14 @@ def test_vad_no_stop_without_prior_speech(vad_config: Config) -> None:
         
         from src.server.python.codewhisper import VoiceActivityDetector
         vad = VoiceActivityDetector(vad_config)
-        vad._silence_frames = 100  # Way over threshold but no speech yet
+        vad._silence_frames = 100
+        vad._start_time = 0
         
         audio = np.zeros(256, dtype=np.int16)
         is_voice, should_stop = vad.process(audio)
         
         assert is_voice is False
-        assert should_stop is False  # No speech detected yet
+        assert should_stop is False
         assert vad._has_speech is False
 
 
@@ -215,139 +316,22 @@ def test_vad_reset(vad_config: Config) -> None:
 def recorder_config() -> Config:
     """Create config for recorder tests."""
     return Config(
-        endpoint="http://localhost:4445",
+        endpoint="ws://localhost:9090",
         model="small",
         language="en",
         vad_silence_threshold=1.5,
         vad_threshold=0.5,
         sample_rate=16000,
+        min_recording_time=1.0,
         hop_size=256,
     )
 
 
-def test_recorder_get_wav_bytes(recorder_config: Config) -> None:
-    """Test raw PCM to WAV conversion."""
+def test_recorder_init(recorder_config: Config) -> None:
+    """Test AudioRecorder initialization."""
     recorder = AudioRecorder(recorder_config)
-
-    # Create 1 second of silence (16000 samples * 2 bytes)
-    raw_audio = b"\x00" * 32000
-
-    wav_bytes = recorder.get_wav_bytes(raw_audio)
-
-    # Verify WAV header
-    assert wav_bytes[:4] == b"RIFF"
-    assert wav_bytes[8:12] == b"WAVE"
-
-    # Parse and verify WAV properties
-    buffer = io.BytesIO(wav_bytes)
-    with wave.open(buffer, "rb") as wf:
-        assert wf.getnchannels() == 1
-        assert wf.getsampwidth() == 2
-        assert wf.getframerate() == 16000
-        assert wf.getnframes() == 16000  # 1 second of audio
-
-
-def test_recorder_get_wav_bytes_empty(recorder_config: Config) -> None:
-    """Test WAV conversion with empty audio."""
-    recorder = AudioRecorder(recorder_config)
-
-    wav_bytes = recorder.get_wav_bytes(b"")
-
-    buffer = io.BytesIO(wav_bytes)
-    with wave.open(buffer, "rb") as wf:
-        assert wf.getnframes() == 0
-
-
-# --- transcribe_audio tests ---
-
-
-@pytest.fixture
-def transcribe_config() -> Config:
-    """Create config for transcription tests."""
-    return Config(
-        endpoint="http://localhost:4445/v1/audio/transcriptions",
-        model="small",
-        language="en",
-        vad_silence_threshold=1.5,
-        vad_threshold=0.5,
-        sample_rate=16000,
-    )
-
-
-@pytest.mark.asyncio
-async def test_transcribe_audio_success(transcribe_config: Config) -> None:
-    """Test successful transcription."""
-    wav_data = b"RIFF" + b"\x00" * 100  # Fake WAV
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"text": "hello world"}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("src.server.python.codewhisper.httpx") as mock_httpx:
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
-
-        result = await transcribe_audio(transcribe_config, wav_data)
-
-        assert result == "hello world"
-        mock_client.post.assert_called_once()
-
-
-@pytest.mark.asyncio
-async def test_transcribe_audio_ws_to_http_conversion() -> None:
-    """Test WebSocket URL conversion to HTTP."""
-    config = Config(
-        endpoint="ws://localhost:4445/v1/audio/transcriptions",
-        model="small",
-        language="en",
-        vad_silence_threshold=1.5,
-        vad_threshold=0.5,
-        sample_rate=16000,
-    )
-
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"text": "test"}
-    mock_response.raise_for_status = MagicMock()
-
-    with patch("src.server.python.codewhisper.httpx") as mock_httpx:
-        mock_client = AsyncMock()
-        mock_client.post.return_value = mock_response
-        mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
-
-        await transcribe_audio(config, b"fake")
-
-        call_args = mock_client.post.call_args
-        assert call_args[0][0] == "http://localhost:4445/v1/audio/transcriptions"
-
-
-@pytest.mark.asyncio
-async def test_transcribe_audio_connection_error(
-    transcribe_config: Config, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Test connection error handling."""
-    with patch("src.server.python.codewhisper.httpx") as mock_httpx:
-        mock_httpx.ConnectError = Exception
-        mock_client = AsyncMock()
-        mock_client.post.side_effect = Exception("Connection refused")
-        mock_httpx.AsyncClient.return_value.__aenter__.return_value = mock_client
-
-        result = await transcribe_audio(transcribe_config, b"fake")
-
-        assert result is None
-
-
-@pytest.mark.asyncio
-async def test_transcribe_audio_no_httpx(
-    transcribe_config: Config, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Test error when httpx not installed."""
-    with patch("src.server.python.codewhisper.httpx", None):
-        result = await transcribe_audio(transcribe_config, b"fake")
-
-        assert result is None
-        captured = capsys.readouterr()
-        assert "httpx not installed" in captured.out
+    assert recorder._process is None
+    assert recorder._buffer == b""
 
 
 # --- VAD integration-style tests (with mocked TenVad) ---
@@ -362,22 +346,23 @@ async def test_vad_full_sequence(vad_config: Config) -> None:
         
         from src.server.python.codewhisper import VoiceActivityDetector
         vad = VoiceActivityDetector(vad_config)
+        vad._start_time = 0  # Bypass min_recording_time
         audio = np.zeros(256, dtype=np.int16)
         
-        # Initial silence - no speech yet (probability, flags=0)
+        # Initial silence - no speech yet
         mock_vad_instance.process.return_value = (0.1, 0)
         for _ in range(10):
             _, should_stop = vad.process(audio)
             assert should_stop is False
         
-        # Speech detected (probability, flags=1)
+        # Speech detected
         mock_vad_instance.process.return_value = (0.9, 1)
         is_voice, should_stop = vad.process(audio)
         assert is_voice is True
         assert should_stop is False
         assert vad._has_speech is True
         
-        # Post-speech silence until stop (probability, flags=0)
+        # Post-speech silence until stop
         mock_vad_instance.process.return_value = (0.1, 0)
         for i in range(62):
             _, should_stop = vad.process(audio)

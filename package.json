@@ -1,7 +1,7 @@
 {
   "name": "ecodewhisper",
   "displayName": "ECodeWhisper",
-  "description": "Eager Code Whisper - Real-time voice-to-text for Cursor/VS Code with WebSocket streaming, faster-whisper and TEN VAD. Text appears as you speak.",
+  "description": "Eager Code Whisper - Real-time voice-to-text for Cursor/VS Code with WhisperLive WebSocket streaming and TEN VAD. Text appears as you speak.",
   "version": "0.3.2",
   "publisher": "damvolkov",
   "author": {
@@ -71,8 +71,8 @@
         },
         "ecodewhisper.whisperEndpoint": {
           "type": "string",
-          "default": "ws://localhost:4445/v1/audio/transcriptions",
-          "description": "WebSocket endpoint for faster-whisper server (ws:// or wss://)"
+          "default": "ws://localhost:9090",
+          "description": "WebSocket endpoint for WhisperLive server (ws:// or wss://)"
         },
         "ecodewhisper.model": {
           "type": "string",
@@ -81,7 +81,7 @@
         },
         "ecodewhisper.language": {
           "type": "string",
-          "default": "es",
+          "default": "en",
           "description": "Language code for transcription (e.g., 'en', 'es', 'fr'). Leave empty for auto-detection."
         },
         "ecodewhisper.vadSilenceThreshold": {

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ECodeWhisper: Real-time voice transcription with WebSocket streaming and TEN VAD."""
+"""ECodeWhisper: Real-time voice transcription with WhisperLive WebSocket streaming and TEN VAD."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import asyncio
 import json
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 
 import numpy as np
@@ -40,6 +41,7 @@ class Config:
     vad_threshold: float
     sample_rate: int
     min_recording_time: float
+    use_server_vad: bool = True
     hop_size: int = 256  # 16ms at 16kHz, optimal for TEN VAD
 
 
@@ -190,26 +192,35 @@ def build_ws_url(config: Config) -> str:
     elif not endpoint.startswith("ws://") and not endpoint.startswith("wss://"):
         endpoint = "ws://" + endpoint
     
-    # Ensure path
-    if "/v1/audio/transcriptions" not in endpoint:
-        endpoint = endpoint.rstrip("/") + "/v1/audio/transcriptions"
-    
-    # Add query params for language/model if specified
-    params = []
-    if config.language:
-        params.append(f"language={config.language}")
-    if config.model:
-        params.append(f"model={config.model}")
-    
-    if params:
-        separator = "&" if "?" in endpoint else "?"
-        endpoint += separator + "&".join(params)
+    # WhisperLive uses root path, remove any path
+    if "://" in endpoint:
+        parts = endpoint.split("://", 1)
+        host_port = parts[1].split("/")[0]
+        endpoint = f"{parts[0]}://{host_port}"
     
     return endpoint
 
 
+def build_whisperlive_config(config: Config) -> dict:
+    """Build WhisperLive initial configuration message."""
+    return {
+        "uid": str(uuid.uuid4()),
+        "language": config.language if config.language else None,
+        "task": "transcribe",
+        "model": config.model if config.model else "small",
+        "use_vad": config.use_server_vad,
+    }
+
+
+def audio_int16_to_float32(audio_data: bytes) -> bytes:
+    """Convert int16 PCM audio to float32 normalized [-1, 1]."""
+    audio_int16 = np.frombuffer(audio_data, dtype=np.int16)
+    audio_float32 = audio_int16.astype(np.float32) / 32768.0
+    return audio_float32.tobytes()
+
+
 async def transcribe_stream(config: Config) -> None:
-    """Main transcription loop with WebSocket streaming and VAD."""
+    """Main transcription loop with WhisperLive WebSocket streaming and VAD."""
     log(f"Starting with config: endpoint={config.endpoint}, model={config.model}, "
         f"language={config.language}, vad_silence={config.vad_silence_threshold}s, "
         f"min_recording={config.min_recording_time}s")
@@ -223,9 +234,38 @@ async def transcribe_stream(config: Config) -> None:
     emit("connected")
 
     try:
-        # Connect to WebSocket
+        # Connect to WhisperLive WebSocket
         async with websockets.connect(ws_url, max_size=None) as ws:
             log("WebSocket connected")
+            
+            # Send initial configuration (WhisperLive protocol)
+            ws_config = build_whisperlive_config(config)
+            await ws.send(json.dumps(ws_config))
+            log(f"Sent WhisperLive config: {ws_config}")
+            
+            # Wait for SERVER_READY
+            server_ready = False
+            while not server_ready:
+                try:
+                    msg = await asyncio.wait_for(ws.recv(), timeout=120.0)
+                    data = json.loads(msg)
+                    log(f"Server message: {data}")
+                    
+                    if data.get("message") == "SERVER_READY":
+                        server_ready = True
+                        log(f"Server ready with backend: {data.get('backend', 'unknown')}")
+                    elif data.get("status") == "WAIT":
+                        log(f"Server busy, wait time: {data.get('message')} minutes")
+                        emit("error", error="Server is busy, please wait")
+                        return
+                    elif data.get("status") == "ERROR":
+                        log(f"Server error: {data.get('message')}")
+                        emit("error", error=data.get("message", "Server error"))
+                        return
+                except asyncio.TimeoutError:
+                    log("Timeout waiting for SERVER_READY")
+                    emit("error", error="Server timeout")
+                    return
             
             await recorder.start()
             emit("ready")
@@ -234,11 +274,10 @@ async def transcribe_stream(config: Config) -> None:
             stdin_task = asyncio.create_task(check_stdin_stop(stop_event))
             
             # Start WebSocket receiver task
-            receiver_task = asyncio.create_task(receive_transcriptions(ws, stop_event))
+            receiver_task = asyncio.create_task(receive_transcriptions(ws, stop_event, ws_config["uid"]))
 
             frame_count = 0
             speech_frames = 0
-            last_text = ""
 
             # Recording loop with VAD
             while not stop_event.is_set():
@@ -248,16 +287,17 @@ async def transcribe_stream(config: Config) -> None:
 
                 frame_count += 1
 
-                # Process with VAD
+                # Process with local VAD
                 audio_array = np.frombuffer(audio_data, dtype=np.int16)
                 is_voice, should_stop = vad.process(audio_array)
 
                 if is_voice:
                     speech_frames += 1
 
-                # Send audio chunk to WebSocket (raw s16le PCM)
+                # Convert int16 to float32 and send (WhisperLive protocol)
+                audio_float32 = audio_int16_to_float32(audio_data)
                 try:
-                    await ws.send(audio_data)
+                    await ws.send(audio_float32)
                 except ConnectionClosed:
                     log("WebSocket connection closed during send")
                     break
@@ -276,6 +316,12 @@ async def transcribe_stream(config: Config) -> None:
             await recorder.stop()
             stdin_task.cancel()
             
+            # Send END_OF_AUDIO marker
+            try:
+                await ws.send("END_OF_AUDIO".encode("utf-8"))
+            except ConnectionClosed:
+                pass
+            
             # Close WebSocket gracefully to get final transcription
             log("Closing WebSocket connection...")
             await ws.close()
@@ -292,15 +338,15 @@ async def transcribe_stream(config: Config) -> None:
                 emit("final", text="")
 
     except ConnectionRefusedError:
-        emit("error", error="Cannot connect to faster-whisper server. Is it running?")
+        emit("error", error="Cannot connect to WhisperLive server. Is it running?")
     except Exception as e:
         log(f"Error in transcription loop: {e}")
         emit("error", error=str(e))
         await recorder.stop()
 
 
-async def receive_transcriptions(ws, stop_event: asyncio.Event) -> str:
-    """Receive transcription messages from WebSocket."""
+async def receive_transcriptions(ws, stop_event: asyncio.Event, expected_uid: str) -> str:
+    """Receive transcription messages from WhisperLive WebSocket."""
     last_text = ""
     try:
         async for message in ws:
@@ -308,13 +354,35 @@ async def receive_transcriptions(ws, stop_event: asyncio.Event) -> str:
                 break
             try:
                 data = json.loads(message)
-                text = data.get("text", "").strip()
-                if text and text != last_text:
-                    last_text = text
-                    emit("partial", text=text)
-                    log(f"Transcription: {text[:60]}...")
+                
+                # Validate UID
+                if data.get("uid") and data.get("uid") != expected_uid:
+                    log(f"Ignoring message with different uid")
+                    continue
+                
+                # Handle segments (WhisperLive format)
+                if "segments" in data:
+                    segments = data["segments"]
+                    if segments:
+                        # Get text from last segment
+                        text = " ".join(seg.get("text", "").strip() for seg in segments)
+                        text = text.strip()
+                        if text and text != last_text:
+                            last_text = text
+                            emit("partial", text=text)
+                            log(f"Transcription: {text[:60]}...")
+                
+                # Handle language detection
+                if "language" in data:
+                    log(f"Detected language: {data['language']} (prob: {data.get('language_prob', 'N/A')})")
+                
+                # Handle disconnect
+                if data.get("message") == "DISCONNECT":
+                    log("Server disconnected")
+                    break
+                    
             except json.JSONDecodeError:
-                log(f"Non-JSON message: {message[:100]}")
+                log(f"Non-JSON message: {message[:100] if isinstance(message, str) else 'binary'}")
     except ConnectionClosed:
         log("WebSocket closed by server")
     except Exception as e:
@@ -346,13 +414,14 @@ async def check_stdin_stop(stop_event: asyncio.Event) -> None:
 def parse_args() -> Config:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="ECodeWhisper voice transcription")
-    parser.add_argument("--endpoint", default="ws://localhost:4445/v1/audio/transcriptions")
-    parser.add_argument("--model", default="")
-    parser.add_argument("--language", default="es")
+    parser.add_argument("--endpoint", default="ws://localhost:9090")
+    parser.add_argument("--model", default="small")
+    parser.add_argument("--language", default="en")
     parser.add_argument("--vad-silence", type=float, default=1.5)
     parser.add_argument("--vad-threshold", type=float, default=0.5)
     parser.add_argument("--sample-rate", type=int, default=16000)
     parser.add_argument("--min-recording", type=float, default=1.0)
+    parser.add_argument("--use-server-vad", action="store_true", default=True)
 
     args = parser.parse_args()
 
@@ -364,6 +433,7 @@ def parse_args() -> Config:
         vad_threshold=args.vad_threshold,
         sample_rate=args.sample_rate,
         min_recording_time=args.min_recording,
+        use_server_vad=args.use_server_vad,
     )
 
 
