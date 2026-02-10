@@ -3,6 +3,10 @@
   <h1>ECodeWhisper</h1>
   <p><strong>Real-time voice-to-text for VS Code and Cursor</strong></p>
   <p>Speak and see your words appear instantly as you talk.</p>
+  <p>
+    <a href="https://open-vsx.org/extension/damvolkov/ecodewhisper"><img src="https://img.shields.io/open-vsx/v/damvolkov/ecodewhisper?label=Open%20VSX" alt="Open VSX"></a>
+    <a href="https://github.com/damvolkov/e-codewhisper"><img src="https://img.shields.io/github/stars/damvolkov/e-codewhisper?style=social" alt="GitHub"></a>
+  </p>
 </div>
 
 ---
